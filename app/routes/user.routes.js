@@ -198,7 +198,7 @@ app.post('/sendmsg', [authJwt.verifyToken], (req, res) => {
 
 		threaddata.messages.push(msgdata)
 		threaddata.lastMessage = req.body.date
-		if (req.userId == p1) {
+		if (req.userId == threaddata.p1) {
 			threaddata.p1seen = true
 			threaddata.p2seen = false
 		} else {
@@ -219,14 +219,63 @@ app.post('/set/seen', [authJwt.verifyToken], (req, res) => {
 			return res.status(500).send({ message: 'ERROR' })
 		}
 
-		if (req.userId == p1) {
-			threaddata.p1seen = true
-		} else {
-			threaddata.p2seen = true
-		}
-		threaddata.save()
+		if (threaddata) {
+			var prsn
+			if (req.userId == threaddata.p1) {
+				threaddata.p1seen = true
+				prsn = 'p1'
+			} else {
+				threaddata.p2seen = true
+				prsn = 'p2'
+			}
+			threaddata.save()
 
-		return res.send({ msg: 'set seen indication', thread: threaddata })
+			var newthread = JSON.parse(JSON.stringify(threaddata))
+			newthread.p1 = undefined
+			newthread.p2 = undefined
+			newthread.p1seen = undefined
+			newthread.p2seen = undefined
+
+			var otherid
+			if (prsn == 'p1') {
+				otherid = threaddata.p2
+			} else {
+				otherid = threaddata.p1
+			}
+
+			// for (let i = 0; i < newthread.messages.length; i++) {
+			// 	var msg = newthread.messages[i]
+			// 	console.log(msg)
+			// 	if (msg.from == req.userId) {
+			// 		msg.from = 'you'
+			// 	} else {
+			// 		msg.from = 'other'
+			// 	}
+			// }
+			// newthread.messages.forEach((msg) => {
+			// })
+
+			User.findById(otherid, { password: 0, roles: 0 }).exec((err, user) => {
+				if (err) {
+					console.log(err)
+					return res.status(500).send({ message: 'ERROR' })
+				}
+
+				newthread.otheruser = user
+
+				if (user) {
+					return res.send({
+						msg: 'set seen indication',
+						thread: newthread,
+						prsn
+					})
+				} else {
+					return res.status(403).send({ error: true, msg: 'nahi h thread' })
+				}
+			})
+		} else {
+			return res.status(403).send({ error: true, msg: 'nahi h thread' })
+		}
 	})
 })
 
