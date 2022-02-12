@@ -7,7 +7,8 @@ const app = express.Router()
 const User = require('../models/user.model')
 const Company = require('../models/company.model')
 const Thread = require('../models/threads.model')
-
+const Investment = require('../models/investment.model')
+const stripe = require('stripe')(process.env.STRIPE_KEY_2)
 // app.use(function (req, res, next) {
 // 	res.header(
 // 		'Access-Control-Allow-Headers',
@@ -18,8 +19,62 @@ const Thread = require('../models/threads.model')
 
 app.get('/all', controller.allAccess)
 
+app.get('/checkout-session', async (req, res) => {
+	var domain
+	if (process.env.NODE_ENV == 'production') {
+		domain = 'http://localhost:3000'
+	} else {
+		domain = 'http://localhost:3000'
+	}
+
+	console.log(req.query)
+
+	const session = await stripe.checkout.sessions.create({
+		line_items: [
+			{
+				price_data: {
+					currency: 'usd',
+					product_data: {
+						name: `Investment to ${
+							req?.query?.company ? req?.query?.company : 'Company Name'
+						}`
+					},
+					unit_amount: parseInt(req?.query?.amt) * 100
+				},
+
+				quantity: 1
+			}
+		],
+		billing_address_collection: 'auto',
+		shipping_address_collection: {
+			allowed_countries: ['US', 'CA']
+		},
+		mode: 'payment',
+		success_url: `${domain}/success?company=${req?.query?.company}&amt=${req?.query?.amt}&percent=${req?.query?.percent}&compuser=${req?.query?.username}`,
+		cancel_url: `${domain}/cancel`
+	})
+
+	var investData = {
+		compusername: req?.query?.username,
+		userid: req?.query?.userid,
+		amount: req?.query?.amt,
+		percentage: req?.query?.percent
+	}
+
+	Investment.create(investData, (error, log) => {
+		if (error) {
+			return res.status(400).send('error')
+		}
+	})
+
+	res.redirect(303, session.url)
+})
+
 app.get('/discover', [authJwt.verifyToken], (req, res) => {
-	Company.find({ creatorID: { $ne: req.userId } }).exec((err, companies) => {
+	Company.find({
+		creatorID: { $ne: req.userId },
+		firstEditComplete: true
+	}).exec((err, companies) => {
 		if (err) {
 			console.log(err)
 			return res.status(500).send({ message: 'ERROR' })
@@ -49,12 +104,9 @@ app.get('/user', [authJwt.verifyToken], (req, res) => {
 app.post('/createcomp', [authJwt.verifyToken], (req, res) => {
 	var compData = {
 		name: req.body.name,
-		username: req.body.username,
+		username: req.body.name.split(' ').join('').toLowerCase(),
 		tagline: req.body.tagline,
-		jobopening: req.body.jobopen,
-		// description: req.body.description,
-		// images: req.body.images,
-		// members: req.body.members,
+		icon: req.body.icon,
 		creatorID: req.userId
 	}
 
@@ -63,15 +115,52 @@ app.post('/createcomp', [authJwt.verifyToken], (req, res) => {
 			return next(error)
 		}
 		console.log('company created')
-		return res.send('created')
+		return res.send({ compData })
 	})
-	// User.findById(req.userId).exec((err, user) => {
-	// 	if (err) {
-	// 		console.log(err)
-	// 		return res.status(500).send({ message: 'ERROR' })
-	// 	}
-	// 	return res.send(user)
-	// })
+})
+
+// edit company
+app.post('/editcomp', [authJwt.verifyToken], (req, res) => {
+	Company.findOne({ username: req.body.username }).exec((err, company) => {
+		if (err) {
+			return res.status(400).send('ERROR')
+		}
+
+		company.name = req.body.name
+		company.tagline = req.body.tagline
+		company.icon = req.body.icon
+		company.website = req.body.website
+		company.location = req.body.location
+		company.employees = req.body.employees
+		company.compcreated = req.body.compcreated
+		company.jobopening = req.body.jobopening
+		company.joblink = req.body.joblink
+		company.investment.goal = req.body.investment.goal
+		company.investment.percentage = req.body.investment.percentage
+		company.pitchdeck = req.body.deck
+		company.video = req.body.video
+		company.images = req.body.images
+		company.description = req.body.description
+
+		company.firstEditComplete = true
+		company.save()
+
+		return res.send('done')
+	})
+})
+
+app.post('/editcompname', [authJwt.verifyToken], (req, res) => {
+	Company.findOne({ username: req.body.username }).exec((err, company) => {
+		if (err) {
+			return res.status(400).send('ERROR')
+		}
+
+		company.name = req.body.name
+		company.tagline = req.body.tagline
+		company.save()
+
+		return res.send('done')
+	})
 })
 
 //get company information
@@ -105,22 +194,41 @@ app.get('/comp/:compname', [authJwt.verifyToken], (req, res) => {
 						return res.status(500).send({ message: 'ERROR' })
 					}
 
-					if (thread) {
-						return res.send({
-							company,
-							isOwned,
-							owner: userdata,
-							threadStarted: true,
-							thread
-						})
-					} else {
-						return res.send({
-							company,
-							isOwned,
-							owner: userdata,
-							threadStarted: false
-						})
-					}
+					Investment.findOne(
+						{ compusername: companyname, userid: req.userId },
+						{ password: 0, roles: 0 }
+					).exec((err, investdata) => {
+						if (err) {
+							console.log(err)
+							return res.status(500).send({ message: 'ERROR' })
+						}
+
+						var invested
+						if (investdata) {
+							invested = investdata
+						} else {
+							invested = false
+						}
+
+						if (thread) {
+							return res.send({
+								company,
+								isOwned,
+								owner: userdata,
+								threadStarted: true,
+								threadID: thread._id,
+								invested
+							})
+						} else {
+							return res.send({
+								company,
+								isOwned,
+								owner: userdata,
+								threadStarted: false,
+								invested
+							})
+						}
+					})
 				}
 			)
 		})
@@ -196,18 +304,53 @@ app.post('/sendmsg', [authJwt.verifyToken], (req, res) => {
 			return res.status(500).send({ message: 'ERROR' })
 		}
 
-		threaddata.messages.push(msgdata)
-		threaddata.lastMessage = req.body.date
-		if (req.userId == threaddata.p1) {
-			threaddata.p1seen = true
-			threaddata.p2seen = false
-		} else {
-			threaddata.p2seen = true
-			threaddata.p1seen = false
-		}
-		threaddata.save()
+		if (threaddata) {
+			threaddata.messages.push(msgdata)
+			threaddata.lastMessage = req.body.date
+			if (req.userId == threaddata.p1) {
+				threaddata.p1seen = true
+				threaddata.p2seen = false
+			} else {
+				threaddata.p2seen = true
+				threaddata.p1seen = false
+			}
+			threaddata.save()
 
-		return res.send({ thread: threaddata })
+			var newthread = JSON.parse(JSON.stringify(threaddata))
+			newthread.p1 = undefined
+			newthread.p2 = undefined
+			newthread.p1seen = undefined
+			newthread.p2seen = undefined
+
+			var otherid
+			if (req.userId == threaddata.p1) {
+				otherid = threaddata.p2
+			} else {
+				otherid = threaddata.p1
+			}
+
+			User.findById(otherid, { password: 0, roles: 0 }).exec((err, user) => {
+				if (err) {
+					console.log(err)
+					return res.status(500).send({ message: 'ERROR' })
+				}
+
+				newthread.otheruser = user
+
+				if (user) {
+					return res.send({
+						msg: 'set seen indication',
+						thread: newthread
+					})
+				} else {
+					return res.status(403).send({ error: true, msg: 'nahi h thread' })
+				}
+			})
+
+			// return res.send({ thread: threaddata })
+		} else {
+			return res.status(403).send('error')
+		}
 	})
 })
 
@@ -243,18 +386,6 @@ app.post('/set/seen', [authJwt.verifyToken], (req, res) => {
 				otherid = threaddata.p1
 			}
 
-			// for (let i = 0; i < newthread.messages.length; i++) {
-			// 	var msg = newthread.messages[i]
-			// 	console.log(msg)
-			// 	if (msg.from == req.userId) {
-			// 		msg.from = 'you'
-			// 	} else {
-			// 		msg.from = 'other'
-			// 	}
-			// }
-			// newthread.messages.forEach((msg) => {
-			// })
-
 			User.findById(otherid, { password: 0, roles: 0 }).exec((err, user) => {
 				if (err) {
 					console.log(err)
@@ -288,7 +419,34 @@ app.get('/threads', [authJwt.verifyToken], (req, res) => {
 				return res.status(500).send({ message: 'ERROR' })
 			}
 
-			return res.send({ threads })
+			var users = []
+			var newthreads = JSON.parse(JSON.stringify(threads))
+
+			newthreads.forEach((t, index) => {
+				if (t.p1 == req.userId) {
+					users.push(t.p2)
+				} else {
+					users.push(t.p1)
+				}
+			})
+			// newthreads[0].hello = 'yo'
+			// console.log(newthreads[0])
+
+			var userarray = []
+
+			// users.forEach((u, index) => {
+			User.find({ _id: { $in: users } }, { password: 0 }).exec(
+				(err, userbro) => {
+					if (err) {
+						console.log(err)
+						return res.status(500).send({ message: 'ERROR' })
+					}
+
+					console.log(userbro)
+					return res.send({ threads: newthreads, users: userbro })
+				}
+			)
+			// })
 		}
 	)
 })
