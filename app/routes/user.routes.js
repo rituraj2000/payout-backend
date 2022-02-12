@@ -22,7 +22,7 @@ app.get('/all', controller.allAccess)
 app.get('/checkout-session', async (req, res) => {
 	var domain
 	if (process.env.NODE_ENV == 'production') {
-		domain = 'http://localhost:3000'
+		domain = 'https://getpayout.co'
 	} else {
 		domain = 'http://localhost:3000'
 	}
@@ -67,12 +67,27 @@ app.get('/checkout-session', async (req, res) => {
 		}
 	})
 
+	Company.find({
+		// creatorID: { $ne: req.userId },
+		username: req?.query?.username
+	}).exec((err, company) => {
+		if (err) {
+			console.log(err)
+			return res.status(500).send({ message: 'ERROR' })
+		}
+
+		if (company) {
+			company.investment.current =
+				parseInt(company?.investment?.current) + parseInt(req?.query?.amt)
+		}
+	})
+
 	res.redirect(303, session.url)
 })
 
 app.get('/discover', [authJwt.verifyToken], (req, res) => {
 	Company.find({
-		creatorID: { $ne: req.userId },
+		// creatorID: { $ne: req.userId },
 		firstEditComplete: true
 	}).exec((err, companies) => {
 		if (err) {
@@ -95,7 +110,14 @@ app.get('/user', [authJwt.verifyToken], (req, res) => {
 				console.log(err)
 				return res.status(500).send({ message: 'ERROR' })
 			}
-			return res.send({ user, companies })
+
+			Investment.find({ userid: req.userId }).exec((err, investments) => {
+				if (err) {
+					console.log(err)
+					return res.status(500).send({ message: 'ERROR' })
+				}
+				return res.send({ user, companies, investments })
+			})
 		})
 	})
 })
@@ -158,6 +180,22 @@ app.post('/editcompname', [authJwt.verifyToken], (req, res) => {
 		company.name = req.body.name
 		company.tagline = req.body.tagline
 		company.save()
+
+		return res.send('done')
+	})
+})
+
+//add name and img to user
+
+app.post('/addnameimg', [authJwt.verifyToken], (req, res) => {
+	User.findOne({ _id: req.userId }).exec((err, user) => {
+		if (err) {
+			return res.status(400).send('ERROR')
+		}
+
+		user.name = req.body.name
+		user.image = req.body.image
+		user.save()
 
 		return res.send('done')
 	})
